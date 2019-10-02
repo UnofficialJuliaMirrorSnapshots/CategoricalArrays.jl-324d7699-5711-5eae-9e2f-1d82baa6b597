@@ -164,8 +164,8 @@ function CategoricalArray{T, N, R}(A::CategoricalArray{S, N, Q};
                                    ordered=_isordered(A)) where {S, T, N, Q, R}
     V = unwrap_catvaluetype(T)
     res = convert(CategoricalArray{V, N, R}, A)
-    refs = res.refs === A.refs ? deepcopy(res.refs) : res.refs
-    pool = res.pool === A.pool ? deepcopy(res.pool) : res.pool
+    refs = res.refs === A.refs ? copy(res.refs) : res.refs
+    pool = res.pool === A.pool ? copy(res.pool) : res.pool
     ordered!(CategoricalArray{V, N}(refs, pool), ordered)
 end
 
@@ -340,66 +340,9 @@ end
 Base.fill!(A::CategoricalArray, v::Any) =
     (fill!(A.refs, get!(A.pool, convert(leveltype(A), v))); A)
 
-function mergelevels(ordered, levels...)
-    T = Base.promote_eltype(levels...)
-    res = Vector{T}(undef, 0)
-
-    nonempty_lv = Compat.findfirst(!isempty, levels)
-    if nonempty_lv === nothing
-        # no levels
-        return res, ordered
-    elseif all(l -> isempty(l) || l == levels[nonempty_lv], levels)
-        # Fast path if all non-empty levels are equal
-        append!(res, levels[nonempty_lv])
-        return res, ordered
-    end
-
-    for l in levels
-        levelsmap = indexin(l, res)
-
-        i = length(res)+1
-        for j = length(l):-1:1
-            @static if VERSION >= v"0.7.0-DEV.3627"
-                if levelsmap[j] === nothing
-                    insert!(res, i, l[j])
-                else
-                    i = levelsmap[j]
-                end
-            else
-                if levelsmap[j] == 0
-                    insert!(res, i, l[j])
-                else
-                    i = levelsmap[j]
-                end
-            end
-        end
-    end
-
-    # Check that result is ordered
-    if ordered
-        levelsmaps = [Compat.indexin(res, l) for l in levels]
-
-        # Check that each original order is preserved
-        for m in levelsmaps
-            issorted(Iterators.filter(x -> x != nothing, m)) || return res, false
-        end
-
-        # Check that all order relations between pairs of subsequent elements
-        # are defined in at least one set of original levels
-        pairs = fill(false, length(res)-1)
-        for m in levelsmaps
-            @inbounds for i in eachindex(pairs)
-                pairs[i] |= (m[i] != nothing) & (m[i+1] != nothing)
-            end
-            all(pairs) && return res, true
-        end
-    end
-
-    res, false
-end
-
 # Methods preserving levels and more efficient than AbstractArray fallbacks
-copy(A::CategoricalArray) = deepcopy(A)
+copy(A::CategoricalArray{T, N}) where {T, N} =
+    CategoricalArray{T, N}(copy(A.refs), copy(A.pool))
 
 CatArrOrSub{T, N} = Union{CategoricalArray{T, N},
                           SubArray{<:Any, N, <:CategoricalArray{T}}} where {T, N}
@@ -598,7 +541,7 @@ end
     @inbounds r = A.refs[I...]
 
     if isa(r, Array)
-        res = CategoricalArray{T, ndims(r)}(r, deepcopy(A.pool))
+        res = CategoricalArray{T, ndims(r)}(r, copy(A.pool))
         return ordered!(res, isordered(A))
     else
         r > 0 || throw(UndefRefError())
