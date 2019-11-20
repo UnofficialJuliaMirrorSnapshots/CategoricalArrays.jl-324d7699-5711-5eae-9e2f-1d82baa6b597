@@ -251,13 +251,14 @@ end
         x = CategoricalArray{Union{T, String}}(["Old", "Young", "Middle", "Young"])
         levels!(x, ["Young", "Middle", "Old"])
         ordered!(x, true)
+        y = CategoricalArray{Union{T, String}}(["X", "Z", "Y", "X"])
 
         for copyf! in (copy!, copyto!)
-            y = CategoricalArray{Union{T, String}}(["X", "Z", "Y", "X"])
-            @test copyf!(x, y) === x
-            @test x == y
-            @test levels(x) == ["Young", "Middle", "Old", "X", "Y", "Z"]
-            @test !isordered(x)
+            x2 = copy(x)
+            @test copyf!(x2, y) === x2
+            @test x2 == y
+            @test levels(x2) == ["Young", "Middle", "Old", "X", "Y", "Z"]
+            @test !isordered(x2)
         end
 
         x = CategoricalArray{Union{T, String}}(["Old", "Young", "Middle", "Young"])
@@ -506,6 +507,66 @@ end
         end
     end
 
+    @testset "assigning into array with empty levels uses orderedness of source" begin
+        # destination is marked as ordered when source is ordered
+        x = CategoricalArray{Union{T, String}}(["Old", "Young", "Middle", "Young"])
+        levels!(x, ["Young", "Middle", "Old"])
+        ordered!(x, true)
+
+        for copyf! in (copyto!, copy!)
+            y = CategoricalArray{Union{T, String}}(undef, 4)
+            copyf!(y, x)
+            @test isordered(y)
+            @test levels(y) == levels(x)
+            if T >: Missing
+                y = CategoricalArray{Union{T, String}}(fill(missing, 4))
+                copyf!(y, x)
+                @test isordered(y)
+                @test levels(y) == levels(x)
+            end
+        end
+
+        y = CategoricalArray{Union{T, String}}(undef, 4)
+        y[1] = x[1]
+        @test isordered(y)
+        @test levels(y) == levels(x)
+        if T >: Missing
+            y = CategoricalArray{Union{T, String}}(fill(missing, 4))
+            y[1] = x[1]
+            @test isordered(y)
+            @test levels(y) == levels(x)
+        end
+
+        # destination is marked as unordered when source is unordered
+        ordered!(x, false)
+
+        for copyf! in (copyto!, copy!)
+            y = CategoricalArray{Union{T, String}}(undef, 4)
+            ordered!(y, true)
+            copyf!(y, x)
+            @test !isordered(y)
+            @test levels(y) == levels(x)
+            if T >: Missing
+                y = CategoricalArray{Union{T, String}}(fill(missing, 4))
+                ordered!(y, true)
+                copyf!(y, x)
+                @test !isordered(y)
+                @test levels(y) == levels(x)
+            end
+        end
+
+        y = CategoricalArray{Union{T, String}}(undef, 4)
+        y[1] = x[1]
+        @test !isordered(y)
+        @test levels(y) == levels(x)
+        if T >: Missing
+            y = CategoricalArray{Union{T, String}}(fill(missing, 4))
+            y[1] = x[1]
+            @test !isordered(y)
+            @test levels(y) == levels(x)
+        end
+    end
+
     @testset "resize!()" begin
         x = CategoricalArray{Union{T, String}}(["Old", "Young", "Middle", "Young"])
         @test resize!(x, 3) === x
@@ -681,7 +742,7 @@ end
         end
     end
 
-    @testset "sort() on both unordered and ordered arrays" begin
+    @testset "sort" begin
         x = CategoricalArray{Union{T, String}}(["Old", "Young", "Middle", "Young"])
         levels!(x, ["Young", "Middle", "Old"])
         @test sort(x) == ["Young", "Young", "Middle", "Old"]
@@ -689,6 +750,39 @@ end
         @test sort(x) == ["Young", "Young", "Middle", "Old"]
         @test sort!(x) === x
         @test x == ["Young", "Young", "Middle", "Old"]
+
+        if T === Missing
+            v = rand(["a", "b", "c", "d"], 1000)
+        else
+            v = rand(["a", "b", "c", "d", missing], 1000)
+        end
+
+        for rev in (true, false)
+            cv = categorical(v)
+            sv = sort(v, rev=rev)
+
+            @test sort(cv, rev=rev) ≅ sv
+            @test sort!(cv, rev=rev) === cv ≅ sv
+
+            cv = categorical(v)
+            levels!(cv, ["b", "a", "c", "d"])
+            @test sort(cv, rev=rev) ≅
+                [levels(cv); missing][sort([5; CategoricalArrays.order(cv.pool)][cv.refs .+ 1], rev=rev)]
+
+            cv = categorical(v)
+            @test sort(cv, rev=rev, lt=(x, y) -> isless(y, x)) ≅
+                sort(cv, rev=!rev) ≅
+                sort(cv, order=Base.Sort.ord((x, y) -> isless(y, x), identity, rev))
+
+            # Function changing order
+            byf1 = x -> ismissing(x) ? "c" : (x == "a" ? "z" : "b")
+            @test sort(cv, rev=rev, by=byf1) ≅ sort(cv, rev=rev, by=byf1)
+
+            # Check that by function is not called on unused levels/missing
+            byf2 = x -> (@assert get(x) != "b"; x)
+            replace!(cv, missing=>"a", "b"=>"a")
+            @test sort(cv, rev=rev, by=byf2) ≅ sort(cv, rev=rev, by=byf2)
+        end
     end
 end
 
